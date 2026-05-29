@@ -673,3 +673,6 @@ Las siguientes capturas muestran los 4 casos de prueba ejecutados localmente sin
 
 ### Archivos generados en local-output/
 ![Local Output Files](evidence/05_local_output_files.png)
+
+### Archivos generados en docker localstorage/
+![Local Output Files](evidence/05_local_output_files.png)
