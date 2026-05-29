@@ -1,0 +1,142 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Serverless Country Intelligence Pipeline
+
+Globals:
+  Function:
+    Runtime: python3.11
+    Timeout: 60
+    MemorySize: 256
+    Environment:
+      Variables:
+        S3_BUCKET: country-pipeline-local # Usamos el mismo del script
+        AWS_DEFAULT_REGION: us-east-1
+        AWS_ACCESS_KEY_ID: test
+        AWS_SECRET_ACCESS_KEY: test
+        # Permite que la Lambda dentro de SAM vea el S3 de LocalStack
+        AWS_ENDPOINT_URL: http://host.docker.internal:4566
+        STATE_MACHINE_ARN: !Ref PipelineStateMachine
+
+Resources:
+
+  # ── S3 BUCKET ───────────────────────────────────────────
+  PipelineBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "country-pipeline-${AWS::AccountId}"
+
+  # ── LAMBDAS ─────────────────────────────────────────────
+  HandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: country-pipeline-handler
+      CodeUri: ../
+      Handler: functions/handler.lambda_handler
+      Policies:
+        - S3FullAccessPolicy:
+            BucketName: !Ref PipelineBucket
+        - StepFunctionsExecutionPolicy:
+            StateMachineName: !GetAtt PipelineStateMachine.Name
+      FunctionUrlConfig:
+        AuthType: NONE
+
+  ProcessCountryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: country-pipeline-process
+      CodeUri: ../
+      Handler: functions/process_country.lambda_handler
+      Timeout: 120
+      Policies:
+        - S3FullAccessPolicy:
+            BucketName: !Ref PipelineBucket
+
+  ConsolidateFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: country-pipeline-consolidate
+      CodeUri: ../
+      Handler: functions/consolidate.lambda_handler
+      Timeout: 120
+      Policies:
+        - S3FullAccessPolicy:
+            BucketName: !Ref PipelineBucket
+
+  # ── STEP FUNCTIONS ──────────────────────────────────────
+  PipelineStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: country-pipeline-state-machine
+      Definition:
+        Comment: "Country Intelligence Pipeline - Fan-out/Fan-in"
+        StartAt: FanOut
+        States:
+
+          FanOut:
+            Type: Map
+            Comment: "Procesa cada país en paralelo (fan-out)"
+            InputPath: "$"
+            ItemsPath: "$.countries"
+            MaxConcurrency: 5
+            Parameters:
+              job_id.$: "$.job_id"
+              country_code.$: "$$.Map.Item.Value.country_code"
+              date_range.$: "$$.Map.Item.Value.date_range"
+            Iterator:
+              StartAt: ProcessCountry
+              States:
+                ProcessCountry:
+                  Type: Task
+                  Resource: !GetAtt ProcessCountryFunction.Arn
+                  Retry:
+                    - ErrorEquals: ["States.TaskFailed"]
+                      IntervalSeconds: 2
+                      MaxAttempts: 2
+                  Catch:
+                    - ErrorEquals: ["States.ALL"]
+                      ResultPath: "$.error"
+                      Next: HandleCountryError
+                  End: true
+                HandleCountryError:
+                  Type: Pass
+                  Parameters:
+                    job_id.$: "$.job_id"
+                    country_code.$: "$.country_code"
+                    status: "FAILED"
+                    error.$: "$.error"
+                  End: true
+            ResultPath: "$.results"
+            Next: FanIn
+
+          FanIn:
+            Type: Task
+            Comment: "Consolida resultados y genera reporte golden (fan-in)"
+            Resource: !GetAtt ConsolidateFunction.Arn
+            Parameters:
+              job_id.$: "$.job_id"
+              results.$: "$.results"
+            End: true
+
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ProcessCountryFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ConsolidateFunction
+
+  # ── CLOUDWATCH LOGS ─────────────────────────────────────
+  PipelineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/country-pipeline
+      RetentionInDays: 7
+
+Outputs:
+  HandlerFunctionUrl:
+    Description: "URL del endpoint HTTP"
+    Value: !GetAtt HandlerFunctionUrl.FunctionUrl
+  StateMachineArn:
+    Description: "ARN del State Machine"
+    Value: !Ref PipelineStateMachine
+  BucketName:
+    Description: "Nombre del bucket S3"
+    Value: !Ref PipelineBucket

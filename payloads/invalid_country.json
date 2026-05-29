@@ -1,0 +1,22 @@
+{
+  "job_id": "JOB-2024-002",
+  "countries": [
+    {
+      "country_code": "CO",
+      "date_range": {
+        "start_date": "2024-01-15",
+        "end_date": "2024-01-20"
+      }
+    },
+    {
+      "country_code": "XX",
+      "date_range": {
+        "start_date": "2024-01-15",
+        "end_date": "2024-01-20"
+      }
+    }
+  ],
+  "report": {
+    "format": ["json", "pdf"]
+  }
+}

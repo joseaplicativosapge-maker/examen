@@ -1,0 +1,8 @@
+.env
+env.prod.json
+venv/
+local-output/
+__pycache__/
+.aws-sam/
+*.pyc
+*.pyo
